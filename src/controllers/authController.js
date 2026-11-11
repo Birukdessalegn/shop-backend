@@ -154,31 +154,32 @@ exports.getUsers = async (req, res, next) => {
   }
 };
 
-// @desc    Seed initial admin if no users exist
+// @desc    Initialize or reset default admin account
 // @route   POST /api/auth/seed-admin
 // @access  Public
 exports.seedAdmin = async (req, res, next) => {
   try {
-    const count = await User.count();
-    if (count > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Database already has users. Admin seeding is disabled.'
+    let admin = await User.findOne({ where: { email: 'admin@shop.com' } });
+
+    if (admin) {
+      admin.password = 'password123';
+      admin.role = 'admin';
+      admin.isActive = true;
+      await admin.save();
+    } else {
+      admin = await User.create({
+        name: 'System Admin',
+        email: 'admin@shop.com',
+        password: 'password123',
+        role: 'admin'
       });
     }
 
-    const admin = await User.create({
-      name: 'System Admin',
-      email: 'admin@shop.com',
-      password: 'adminpassword123',
-      role: 'admin'
-    });
-
     const token = generateToken(admin.id);
 
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message: 'Default admin account created successfully',
+      message: 'Admin account initialized! You can now log in with password123',
       data: {
         id: admin.id,
         _id: admin.id,
@@ -188,7 +189,7 @@ exports.seedAdmin = async (req, res, next) => {
         token,
         credentials: {
           email: 'admin@shop.com',
-          password: 'adminpassword123'
+          password: 'password123'
         }
       }
     });
