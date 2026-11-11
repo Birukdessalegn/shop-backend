@@ -31,6 +31,11 @@ if (process.env.NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 }
 
+// Root endpoint for cPanel health check
+app.get('/', (req, res) => {
+  res.status(200).send('Electronics Shop Management API is running');
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.status(200).json({
