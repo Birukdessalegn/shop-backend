@@ -1,0 +1,33 @@
+{
+  "name": "electronics-shop-backend",
+  "version": "1.0.0",
+  "description": "Electronics Shop Management System - Backend API",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "seed": "node src/config/seed.js"
+  },
+  "keywords": [
+    "electronics",
+    "pos",
+    "inventory",
+    "credit-sales",
+    "serial-numbers"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "pg": "^8.23.1",
+    "sequelize": "^6.37.8"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
