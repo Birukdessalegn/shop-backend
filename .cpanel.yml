@@ -1,7 +1,7 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/ambbatxv/shop-backend/
+    - export DEPLOYPATH=/home/ambbatxv/shopyapi.ambbatech.com/
     - /bin/mkdir -p $DEPLOYPATH
     - /bin/cp -R src $DEPLOYPATH
     - /bin/cp package.json $DEPLOYPATH
