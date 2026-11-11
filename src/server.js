@@ -18,9 +18,13 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const app = express();
 
 // Middleware
+const allowedOrigins = process.env.CLIENT_URL
+  ? [process.env.CLIENT_URL, 'http://localhost:5173']
+  : true;
+
 app.use(
   cors({
-    origin: '*',
+    origin: allowedOrigins,
     credentials: true
   })
 );
