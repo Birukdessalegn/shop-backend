@@ -416,21 +416,18 @@ exports.sellSerial = async (req, res, next) => {
 
     await serial.save({ transaction });
 
-    let cashPayment = null;
-    if (customer) {
-      cashPayment = await Payment.create(
-        {
-          serialNumberId: serial.id,
-          customerId: customer.id,
-          amount: cashPrice,
-          paymentMethod: paymentMethod || 'Cash',
-          notes: notes ? `Full cash sale: ${notes}` : 'Full cash sale',
-          recordedById: req.user.id,
-          paymentDate: new Date()
-        },
-        { transaction }
-      );
-    }
+    const cashPayment = await Payment.create(
+      {
+        serialNumberId: serial.id,
+        customerId: customer ? customer.id : null,
+        amount: cashPrice,
+        paymentMethod: paymentMethod || 'Cash',
+        notes: notes ? `Full cash sale: ${notes}` : 'Full cash sale',
+        recordedById: req.user.id,
+        paymentDate: new Date()
+      },
+      { transaction }
+    );
 
     await transaction.commit();
 
