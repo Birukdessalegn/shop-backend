@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { Customer, SerialNumber, Payment, Product, User } = require('../models');
+const { Customer, Sale, Payment, Product, User, SerialNumber } = require('../models');
 
 // @desc    Get all customers with credit balances & stats
 // @route   GET /api/customers
@@ -26,6 +26,11 @@ exports.getCustomers = async (req, res, next) => {
           attributes: ['id', 'name']
         },
         {
+          model: Sale,
+          as: 'sales',
+          attributes: ['id', 'quantity', 'totalAmount', 'paidAmount', 'remainingBalance', 'saleType', 'creditStatus']
+        },
+        {
           model: SerialNumber,
           as: 'serialNumbers',
           attributes: ['id', 'status', 'creditAmount', 'paidAmount', 'remainingBalance']
@@ -36,28 +41,44 @@ exports.getCustomers = async (req, res, next) => {
 
     const enriched = customers.map((c) => {
       const cJson = c.toJSON();
+      const sales = cJson.sales || [];
       const serials = cJson.serialNumbers || [];
 
-      let totalItemsBought = serials.length;
+      let totalItemsBought = 0;
       let itemsOnCredit = 0;
       let totalCreditAmount = 0;
       let totalPaidAmount = 0;
       let totalOutstandingBalance = 0;
 
-      serials.forEach((s) => {
-        if (s.status === 'On Credit') {
-          itemsOnCredit += 1;
-          totalOutstandingBalance += parseFloat(s.remainingBalance) || 0;
+      // Calculate from Sales
+      sales.forEach((s) => {
+        totalItemsBought += parseInt(s.quantity, 10) || 1;
+        if (s.saleType === 'Credit') {
+          totalCreditAmount += parseFloat(s.totalAmount) || 0;
+          totalPaidAmount += parseFloat(s.paidAmount) || 0;
+          const rem = parseFloat(s.remainingBalance) || 0;
+          if (rem > 0) {
+            itemsOnCredit += 1;
+            totalOutstandingBalance += rem;
+          }
         }
-        totalCreditAmount += parseFloat(s.creditAmount) || 0;
-        totalPaidAmount += parseFloat(s.paidAmount) || 0;
+      });
+
+      // Also include any legacy serial numbers
+      serials.forEach((sn) => {
+        if (sn.status === 'On Credit') {
+          itemsOnCredit += 1;
+          totalOutstandingBalance += parseFloat(sn.remainingBalance) || 0;
+        }
+        totalCreditAmount += parseFloat(sn.creditAmount) || 0;
+        totalPaidAmount += parseFloat(sn.paidAmount) || 0;
       });
 
       return {
         ...cJson,
         _id: cJson.id,
         stats: {
-          totalItemsBought,
+          totalItemsBought: totalItemsBought || serials.length,
           itemsOnCredit,
           totalCreditAmount: +totalCreditAmount.toFixed(2),
           totalPaidAmount: +totalPaidAmount.toFixed(2),
@@ -76,7 +97,7 @@ exports.getCustomers = async (req, res, next) => {
   }
 };
 
-// @desc    Get single customer by ID with full ledger (credit items and payments)
+// @desc    Get single customer by ID with full ledger (credit sales and payments)
 // @route   GET /api/customers/:id
 // @access  Private
 exports.getCustomerById = async (req, res, next) => {
@@ -89,6 +110,11 @@ exports.getCustomerById = async (req, res, next) => {
           attributes: ['id', 'name']
         },
         {
+          model: Sale,
+          as: 'sales',
+          include: [{ model: Product, as: 'product' }]
+        },
+        {
           model: SerialNumber,
           as: 'serialNumbers',
           include: [{ model: Product, as: 'product' }]
@@ -97,7 +123,6 @@ exports.getCustomerById = async (req, res, next) => {
           model: Payment,
           as: 'payments',
           include: [
-            { model: SerialNumber, as: 'serialNumber', attributes: ['id', 'serialNumber'] },
             { model: User, as: 'recordedBy', attributes: ['id', 'name'] }
           ]
         }
@@ -112,10 +137,16 @@ exports.getCustomerById = async (req, res, next) => {
     }
 
     const cJson = customer.toJSON();
-    const serials = (cJson.serialNumbers || []).map((s) => ({
+    const sales = (cJson.sales || []).map((s) => ({
       ...s,
       _id: s.id,
       product: s.product ? { ...s.product, _id: s.product.id } : null
+    }));
+
+    const serials = (cJson.serialNumbers || []).map((sn) => ({
+      ...sn,
+      _id: sn.id,
+      product: sn.product ? { ...sn.product, _id: sn.product.id } : null
     }));
 
     const payments = (cJson.payments || []).map((p) => ({
@@ -127,12 +158,20 @@ exports.getCustomerById = async (req, res, next) => {
     let totalCredit = 0;
     let totalPaid = 0;
 
-    serials.forEach((s) => {
-      if (s.status === 'On Credit') {
+    sales.forEach((s) => {
+      if (s.saleType === 'Credit') {
+        totalCredit += parseFloat(s.totalAmount) || 0;
+        totalPaid += parseFloat(s.paidAmount) || 0;
         totalOutstanding += parseFloat(s.remainingBalance) || 0;
       }
-      totalCredit += parseFloat(s.creditAmount) || 0;
-      totalPaid += parseFloat(s.paidAmount) || 0;
+    });
+
+    serials.forEach((sn) => {
+      if (sn.status === 'On Credit') {
+        totalOutstanding += parseFloat(sn.remainingBalance) || 0;
+      }
+      totalCredit += parseFloat(sn.creditAmount) || 0;
+      totalPaid += parseFloat(sn.paidAmount) || 0;
     });
 
     res.status(200).json({
@@ -141,12 +180,13 @@ exports.getCustomerById = async (req, res, next) => {
         ...cJson,
         _id: cJson.id,
         summary: {
-          totalPurchases: serials.length,
-          activeCreditItems: serials.filter((s) => s.status === 'On Credit').length,
+          totalPurchases: sales.length + serials.length,
+          activeCreditItems: sales.filter((s) => s.saleType === 'Credit' && s.remainingBalance > 0).length,
           totalOutstanding: +totalOutstanding.toFixed(2),
           totalCredit: +totalCredit.toFixed(2),
           totalPaid: +totalPaid.toFixed(2)
         },
+        sales,
         serials,
         payments
       }
@@ -178,14 +218,12 @@ exports.createCustomer = async (req, res, next) => {
       createdById: req.user.id
     });
 
-    const cJson = customer.toJSON();
-
     res.status(201).json({
       success: true,
-      message: 'Customer created successfully',
+      message: 'Customer registered successfully',
       data: {
-        ...cJson,
-        _id: cJson.id
+        ...customer.toJSON(),
+        _id: customer.id
       }
     });
   } catch (error) {
@@ -193,7 +231,7 @@ exports.createCustomer = async (req, res, next) => {
   }
 };
 
-// @desc    Update a customer
+// @desc    Update customer details
 // @route   PUT /api/customers/:id
 // @access  Private
 exports.updateCustomer = async (req, res, next) => {
@@ -208,6 +246,7 @@ exports.updateCustomer = async (req, res, next) => {
     }
 
     const { name, phone, address, notes } = req.body;
+
     if (name) customer.name = name;
     if (phone) customer.phone = phone;
     if (address !== undefined) customer.address = address;
@@ -215,14 +254,12 @@ exports.updateCustomer = async (req, res, next) => {
 
     await customer.save();
 
-    const cJson = customer.toJSON();
-
     res.status(200).json({
       success: true,
       message: 'Customer updated successfully',
       data: {
-        ...cJson,
-        _id: cJson.id
+        ...customer.toJSON(),
+        _id: customer.id
       }
     });
   } catch (error) {
@@ -230,9 +267,9 @@ exports.updateCustomer = async (req, res, next) => {
   }
 };
 
-// @desc    Delete a customer
+// @desc    Delete customer
 // @route   DELETE /api/customers/:id
-// @access  Private/Admin
+// @access  Private (Admin only)
 exports.deleteCustomer = async (req, res, next) => {
   try {
     const customer = await Customer.findByPk(req.params.id);
@@ -244,19 +281,19 @@ exports.deleteCustomer = async (req, res, next) => {
       });
     }
 
-    // Check if customer has serials with outstanding credit
-    const activeCredit = await SerialNumber.count({
+    // Check if customer has outstanding credit balance
+    const activeSales = await Sale.count({
       where: {
         customerId: customer.id,
-        status: 'On Credit',
+        saleType: 'Credit',
         remainingBalance: { [Op.gt]: 0 }
       }
     });
 
-    if (activeCredit > 0) {
+    if (activeSales > 0) {
       return res.status(400).json({
         success: false,
-        message: `Cannot delete customer. This customer currently has ${activeCredit} item(s) on credit with outstanding debt.`
+        message: 'Cannot delete customer who currently has unsettled credit debt'
       });
     }
 

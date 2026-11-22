@@ -1,102 +1,89 @@
 const { Op } = require('sequelize');
-const { Product, SerialNumber, Customer, Payment, User } = require('../models');
+const { Product, Sale, Customer, Payment, User } = require('../models');
 
-// @desc    Get comprehensive dashboard metrics & financial telemetry
+// @desc    Get comprehensive simplified dashboard metrics & financial telemetry
 // @route   GET /api/dashboard
 // @access  Private
 exports.getDashboardStats = async (req, res, next) => {
   try {
-    // 1. Total products
+    // 1. Total products & total pieces in stock
     const totalProducts = await Product.count();
+    const allProducts = await Product.findAll({
+      attributes: ['id', 'stockQuantity', 'purchasePrice', 'sellingPrice', 'category']
+    });
 
-    // 2. Serial status counts and financial aggregates
-    const allSerials = await SerialNumber.findAll({
-      attributes: [
-        'status',
-        'saleType',
-        'creditAmount',
-        'paidAmount',
-        'remainingBalance',
-        'soldDate',
-        'createdAt'
-      ],
+    let totalStockPieces = 0;
+    let currentInventoryCost = 0;
+    let currentInventoryRetail = 0;
+    const categoryStockMap = {};
+
+    allProducts.forEach((p) => {
+      const qty = parseInt(p.stockQuantity, 10) || 0;
+      const cost = parseFloat(p.purchasePrice) || 0;
+      const retail = parseFloat(p.sellingPrice) || 0;
+      const cat = p.category || 'General';
+
+      totalStockPieces += qty;
+      currentInventoryCost += cost * qty;
+      currentInventoryRetail += retail * qty;
+
+      if (!categoryStockMap[cat]) {
+        categoryStockMap[cat] = { category: cat, totalCount: 0, stockPieces: 0 };
+      }
+      categoryStockMap[cat].totalCount += 1;
+      categoryStockMap[cat].stockPieces += qty;
+    });
+
+    // 2. Sales aggregates
+    const allSales = await Sale.findAll({
       include: [
-        {
-          model: Product,
-          as: 'product',
-          attributes: ['id', 'name', 'category', 'purchasePrice', 'sellingPrice']
-        }
+        { model: Product, as: 'product', attributes: ['id', 'name', 'category'] },
+        { model: Customer, as: 'customer', attributes: ['id', 'name'] }
       ]
     });
 
-    let availableSerials = 0;
-    let itemsOnCredit = 0;
-    let itemsSold = 0;
-    let itemsReturned = 0;
-    let itemsDamaged = 0;
-    let totalCreditOutstanding = 0;
-    let totalCreditIssued = 0;
+    let totalGrossSales = 0;
     let totalCashSales = 0;
+    let totalCreditIssued = 0;
+    let totalCreditOutstanding = 0;
     let totalCostOfSold = 0;
-    let currentInventoryCost = 0;
-    let currentInventoryRetail = 0;
+    let totalUnitsSold = 0;
+    let activeCreditCount = 0;
 
-    allSerials.forEach((sn) => {
-      const status = sn.status;
-      const cost = parseFloat(sn.product?.purchasePrice) || 0;
-      const retail = parseFloat(sn.product?.sellingPrice) || 0;
+    allSales.forEach((s) => {
+      const amt = parseFloat(s.totalAmount) || 0;
+      const cost = (parseFloat(s.purchasePrice) || 0) * (parseInt(s.quantity, 10) || 1);
+      const qty = parseInt(s.quantity, 10) || 1;
+      const rem = parseFloat(s.remainingBalance) || 0;
 
-      if (status === 'Available') {
-        availableSerials += 1;
-        currentInventoryCost += cost;
-        currentInventoryRetail += retail;
-      } else if (status === 'On Credit') {
-        itemsOnCredit += 1;
-        const credit = parseFloat(sn.creditAmount) || retail;
-        totalCreditIssued += credit;
-        totalCreditOutstanding += parseFloat(sn.remainingBalance) || 0;
-        totalCostOfSold += cost;
-      } else if (status === 'Sold') {
-        itemsSold += 1;
-        const cash = parseFloat(sn.paidAmount) || retail;
-        totalCashSales += cash;
-        totalCostOfSold += cost;
-      } else if (status === 'Returned') {
-        itemsReturned += 1;
-        currentInventoryCost += cost;
-      } else if (status === 'Damaged') {
-        itemsDamaged += 1;
+      totalGrossSales += amt;
+      totalCostOfSold += cost;
+      totalUnitsSold += qty;
+
+      if (s.saleType === 'Credit') {
+        totalCreditIssued += amt;
+        if (rem > 0) {
+          totalCreditOutstanding += rem;
+          activeCreditCount += 1;
+        }
+      } else {
+        totalCashSales += amt;
       }
     });
 
-    // Bulk / Non-serialized inventory valuation
-    const bulkProducts = await Product.findAll({
-      where: { hasSerial: false },
-      attributes: ['stockQuantity', 'purchasePrice', 'sellingPrice']
-    });
-
-    bulkProducts.forEach((bp) => {
-      const qty = parseInt(bp.stockQuantity, 10) || 0;
-      const cost = parseFloat(bp.purchasePrice) || 0;
-      const retail = parseFloat(bp.sellingPrice) || 0;
-      currentInventoryCost += cost * qty;
-      currentInventoryRetail += retail * qty;
-    });
-
-    // 3. Customers count
+    // 3. Total customers
     const totalCustomers = await Customer.count();
 
-    // 4. Payments total collected
+    // 4. Actual cash collected in hand
     const totalCollected = (await Payment.sum('amount')) || 0;
     const totalPaymentsCount = await Payment.count();
 
-    // Financial performance calculations
-    const totalGrossSales = totalCashSales + totalCreditIssued;
+    // 5. Net Profit
     const netProfit = totalGrossSales - totalCostOfSold;
     const profitMargin =
       totalGrossSales > 0 ? +((netProfit / totalGrossSales) * 100).toFixed(1) : 0;
 
-    // 5. Recent 7 Days Timeline Trend
+    // 6. 7-Day Timeline Trend
     const now = new Date();
     const last7Days = [];
     for (let i = 6; i >= 0; i--) {
@@ -112,12 +99,21 @@ exports.getDashboardStats = async (req, res, next) => {
       });
     }
 
-    // Populate timeline with payments
-    const allRecentPayments = await Payment.findAll({
+    allSales.forEach((s) => {
+      if (s.soldDate) {
+        const sDate = new Date(s.soldDate).toISOString().split('T')[0];
+        const match = last7Days.find((day) => day.date === sDate);
+        if (match) {
+          match.sales += parseFloat(s.totalAmount) || 0;
+        }
+      }
+    });
+
+    const allPayments = await Payment.findAll({
       attributes: ['amount', 'paymentDate']
     });
 
-    allRecentPayments.forEach((p) => {
+    allPayments.forEach((p) => {
       if (p.paymentDate) {
         const pDate = new Date(p.paymentDate).toISOString().split('T')[0];
         const match = last7Days.find((day) => day.date === pDate);
@@ -127,57 +123,22 @@ exports.getDashboardStats = async (req, res, next) => {
       }
     });
 
-    // Populate timeline with sold serials
-    allSerials.forEach((sn) => {
-      if (sn.soldDate && (sn.status === 'Sold' || sn.status === 'On Credit')) {
-        const sDate = new Date(sn.soldDate).toISOString().split('T')[0];
-        const match = last7Days.find((day) => day.date === sDate);
-        if (match) {
-          const val =
-            sn.status === 'Sold'
-              ? parseFloat(sn.paidAmount) || parseFloat(sn.product?.sellingPrice) || 0
-              : parseFloat(sn.creditAmount) || parseFloat(sn.product?.sellingPrice) || 0;
-          match.sales += val;
-        }
-      }
-    });
-
-    // 6. Category breakdown
-    const categoryMap = {};
-    allSerials.forEach((sn) => {
-      const cat = sn.product?.category || 'General';
-      if (!categoryMap[cat]) {
-        categoryMap[cat] = { category: cat, totalCount: 0, availableCount: 0 };
-      }
-      categoryMap[cat].totalCount += 1;
-      if (sn.status === 'Available') categoryMap[cat].availableCount += 1;
-    });
-    const categoryBreakdown = Object.values(categoryMap);
-
-    // 7. Recent credit items with outstanding balance
-    const rawCreditItems = await SerialNumber.findAll({
+    // 7. Active credit sales (unsettled debt)
+    const rawCreditSales = await Sale.findAll({
       where: {
-        status: 'On Credit',
+        saleType: 'Credit',
         remainingBalance: { [Op.gt]: 0 }
       },
       include: [
-        {
-          model: Product,
-          as: 'product',
-          attributes: ['id', 'name', 'brand', 'model', 'sellingPrice']
-        },
-        {
-          model: Customer,
-          as: 'customer',
-          attributes: ['id', 'name', 'phone']
-        }
+        { model: Product, as: 'product', attributes: ['id', 'name', 'brand', 'model', 'sellingPrice'] },
+        { model: Customer, as: 'customer', attributes: ['id', 'name', 'phone'] }
       ],
       order: [['soldDate', 'DESC']],
-      limit: 6
+      limit: 8
     });
 
-    const recentCreditItems = rawCreditItems.map((item) => {
-      const json = item.toJSON();
+    const recentCreditSales = rawCreditSales.map((s) => {
+      const json = s.toJSON();
       return {
         ...json,
         _id: json.id,
@@ -190,11 +151,11 @@ exports.getDashboardStats = async (req, res, next) => {
     const rawPayments = await Payment.findAll({
       include: [
         { model: Customer, as: 'customer', attributes: ['id', 'name', 'phone'] },
-        { model: SerialNumber, as: 'serialNumber', attributes: ['id', 'serialNumber'] },
+        { model: Sale, as: 'sale', include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }] },
         { model: User, as: 'recordedBy', attributes: ['id', 'name'] }
       ],
       order: [['paymentDate', 'DESC']],
-      limit: 6
+      limit: 8
     });
 
     const recentPayments = rawPayments.map((p) => {
@@ -203,7 +164,7 @@ exports.getDashboardStats = async (req, res, next) => {
         ...json,
         _id: json.id,
         customer: json.customer ? { ...json.customer, _id: json.customer.id } : null,
-        serialNumber: json.serialNumber ? { ...json.serialNumber, _id: json.serialNumber.id } : null
+        sale: json.sale ? { ...json.sale, _id: json.sale.id } : null
       };
     });
 
@@ -212,18 +173,16 @@ exports.getDashboardStats = async (req, res, next) => {
       data: {
         metrics: {
           totalProducts,
-          availableSerials,
-          itemsOnCredit,
+          totalStockPieces,
+          itemsOnCredit: activeCreditCount,
           totalCreditOutstanding: +totalCreditOutstanding.toFixed(2),
           totalCreditIssued: +totalCreditIssued.toFixed(2),
           totalCustomers,
-          itemsSold,
-          itemsReturned,
-          itemsDamaged,
+          itemsSold: totalUnitsSold,
           totalCollected: +totalCollected.toFixed(2),
           totalPaymentsCount,
 
-          // Enhanced Financial Telemetry
+          // Financial aggregates
           totalCashSales: +totalCashSales.toFixed(2),
           totalGrossSales: +totalGrossSales.toFixed(2),
           totalCostOfSold: +totalCostOfSold.toFixed(2),
@@ -233,8 +192,8 @@ exports.getDashboardStats = async (req, res, next) => {
           currentInventoryRetail: +currentInventoryRetail.toFixed(2)
         },
         dailyTrend: last7Days,
-        categoryBreakdown,
-        recentCreditItems,
+        categoryBreakdown: Object.values(categoryStockMap),
+        recentCreditItems: recentCreditSales,
         recentPayments
       }
     });

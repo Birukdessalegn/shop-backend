@@ -1,19 +1,16 @@
 const { Op } = require('sequelize');
-const { Product, SerialNumber, User, sequelize } = require('../models');
+const { Product, User, sequelize } = require('../models');
 
-// @desc    Get all products with inventory stats
+// @desc    Get all products with stock quantity
 // @route   GET /api/products
 // @access  Private
 exports.getProducts = async (req, res, next) => {
   try {
-    const { category, search, hasSerial } = req.query;
+    const { category, search } = req.query;
 
     const where = {};
     if (category && category !== 'All') {
       where.category = category;
-    }
-    if (hasSerial !== undefined) {
-      where.hasSerial = hasSerial === 'true';
     }
     if (search) {
       where[Op.or] = [
@@ -31,40 +28,23 @@ exports.getProducts = async (req, res, next) => {
           model: User,
           as: 'createdBy',
           attributes: ['id', 'name', 'email']
-        },
-        {
-          model: SerialNumber,
-          as: 'serials',
-          attributes: ['id', 'status', 'remainingBalance', 'serialNumber']
         }
       ],
       order: [['createdAt', 'DESC']]
     });
 
-    const enrichedProducts = products.map((product) => {
+    const formatted = products.map((product) => {
       const prodJson = product.toJSON();
-      const serials = prodJson.serials || [];
-
-      const inventory = {
-        totalSerials: serials.length,
-        availableSerials: serials.filter((s) => s.status === 'Available').length,
-        onCreditSerials: serials.filter((s) => s.status === 'On Credit').length,
-        soldSerials: serials.filter((s) => s.status === 'Sold').length,
-        damagedSerials: serials.filter((s) => s.status === 'Damaged').length,
-        returnedSerials: serials.filter((s) => s.status === 'Returned').length
-      };
-
       return {
         ...prodJson,
-        _id: prodJson.id,
-        inventory
+        _id: prodJson.id
       };
     });
 
     res.status(200).json({
       success: true,
-      count: enrichedProducts.length,
-      data: enrichedProducts
+      count: formatted.length,
+      data: formatted
     });
   } catch (error) {
     next(error);
@@ -82,10 +62,6 @@ exports.getProductById = async (req, res, next) => {
           model: User,
           as: 'createdBy',
           attributes: ['id', 'name', 'email']
-        },
-        {
-          model: SerialNumber,
-          as: 'serials'
         }
       ]
     });
@@ -98,23 +74,12 @@ exports.getProductById = async (req, res, next) => {
     }
 
     const prodJson = product.toJSON();
-    const serials = prodJson.serials || [];
-
-    const summary = {
-      total: serials.length,
-      available: serials.filter((s) => s.status === 'Available').length,
-      onCredit: serials.filter((s) => s.status === 'On Credit').length,
-      sold: serials.filter((s) => s.status === 'Sold').length,
-      damaged: serials.filter((s) => s.status === 'Damaged').length,
-      returned: serials.filter((s) => s.status === 'Returned').length
-    };
 
     res.status(200).json({
       success: true,
       data: {
         ...prodJson,
-        _id: prodJson.id,
-        summary
+        _id: prodJson.id
       }
     });
   } catch (error) {
@@ -122,11 +87,10 @@ exports.getProductById = async (req, res, next) => {
   }
 };
 
-// @desc    Create a new product (with optional instant serial numbers registration)
+// @desc    Create a new product with initial stock quantity
 // @route   POST /api/products
-// @access  Private
+// @access  Private (Admin, Stock, Staff)
 exports.createProduct = async (req, res, next) => {
-  const transaction = await sequelize.transaction();
   try {
     const {
       name,
@@ -135,107 +99,56 @@ exports.createProduct = async (req, res, next) => {
       category,
       purchasePrice,
       sellingPrice,
-      hasSerial,
-      stockQuantity,
-      description,
-      serialNumber,
-      serialNumbers
+      stockQuantity = 1,
+      description
     } = req.body;
 
-    // Parse serial numbers if provided
-    let serialList = [];
-    if (Array.isArray(serialNumbers)) {
-      serialList = serialNumbers;
-    } else if (typeof serialNumbers === 'string') {
-      serialList = serialNumbers
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-    } else if (serialNumber && typeof serialNumber === 'string') {
-      serialList = serialNumber
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'Item name is required' });
     }
 
-    const cleanedSerials = serialList.map((s) => s.trim().toUpperCase());
-    const uniqueSerials = [...new Set(cleanedSerials)];
-
-    // Check if any serial already exists
-    if (uniqueSerials.length > 0) {
-      const existing = await SerialNumber.findAll({
-        where: { serialNumber: { [Op.in]: uniqueSerials } },
-        attributes: ['serialNumber'],
-        transaction
-      });
-
-      if (existing.length > 0) {
-        await transaction.rollback();
-        const existingNames = existing.map((e) => e.serialNumber).join(', ');
-        return res.status(400).json({
-          success: false,
-          message: `The serial number(s) are already registered in your shop: ${existingNames}`
-        });
-      }
+    const cost = parseFloat(purchasePrice);
+    if (isNaN(cost) || cost < 0) {
+      return res.status(400).json({ success: false, message: 'Valid cost price is required' });
     }
 
-    const calculatedStock = uniqueSerials.length > 0
-      ? uniqueSerials.length
-      : parseInt(stockQuantity, 10) || 0;
-
-    const product = await Product.create(
-      {
-        name,
-        brand: brand || '',
-        model: model || '',
-        category: category || 'General',
-        purchasePrice: parseFloat(purchasePrice) || 0,
-        sellingPrice: parseFloat(sellingPrice) || 0,
-        hasSerial: hasSerial !== undefined ? hasSerial : (uniqueSerials.length > 0 ? true : true),
-        stockQuantity: calculatedStock,
-        description: description || '',
-        createdById: req.user.id
-      },
-      { transaction }
-    );
-
-    let createdSerials = [];
-    if (uniqueSerials.length > 0) {
-      const serialDocs = uniqueSerials.map((sn) => ({
-        serialNumber: sn,
-        productId: product.id,
-        status: 'Available',
-        notes: `Registered with product: ${name}`,
-        createdById: req.user.id
-      }));
-
-      createdSerials = await SerialNumber.bulkCreate(serialDocs, { transaction });
+    const sell = parseFloat(sellingPrice);
+    if (isNaN(sell) || sell < 0) {
+      return res.status(400).json({ success: false, message: 'Valid selling price is required' });
     }
 
-    await transaction.commit();
+    const qty = parseInt(stockQuantity, 10);
+    const finalStock = isNaN(qty) || qty < 0 ? 0 : qty;
 
-    const prodJson = product.toJSON();
+    const product = await Product.create({
+      name: name.trim(),
+      brand: brand ? brand.trim() : '',
+      model: model ? model.trim() : '',
+      category: category || 'General',
+      purchasePrice: cost,
+      sellingPrice: sell,
+      stockQuantity: finalStock,
+      hasSerial: false,
+      description: description || '',
+      createdById: req.user.id
+    });
 
     res.status(201).json({
       success: true,
-      message: uniqueSerials.length > 0
-        ? `Product created and ${uniqueSerials.length} serial number(s) registered successfully`
-        : 'Product created successfully',
+      message: `Product "${product.name}" created with ${product.stockQuantity} piece(s) in stock`,
       data: {
-        ...prodJson,
-        _id: prodJson.id,
-        serials: createdSerials
+        ...product.toJSON(),
+        _id: product.id
       }
     });
   } catch (error) {
-    await transaction.rollback();
     next(error);
   }
 };
 
-// @desc    Update a product
+// @desc    Update product details or stock
 // @route   PUT /api/products/:id
-// @access  Private
+// @access  Private (Admin, Stock, Staff)
 exports.updateProduct = async (req, res, next) => {
   try {
     const product = await Product.findByPk(req.params.id);
@@ -247,34 +160,34 @@ exports.updateProduct = async (req, res, next) => {
       });
     }
 
-    const fieldsToUpdate = [
-      'name',
-      'brand',
-      'model',
-      'category',
-      'purchasePrice',
-      'sellingPrice',
-      'hasSerial',
-      'stockQuantity',
-      'description'
-    ];
+    const {
+      name,
+      brand,
+      model,
+      category,
+      purchasePrice,
+      sellingPrice,
+      stockQuantity,
+      description
+    } = req.body;
 
-    fieldsToUpdate.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        product[field] = req.body[field];
-      }
-    });
+    if (name !== undefined) product.name = name.trim();
+    if (brand !== undefined) product.brand = brand.trim();
+    if (model !== undefined) product.model = model.trim();
+    if (category !== undefined) product.category = category;
+    if (purchasePrice !== undefined) product.purchasePrice = parseFloat(purchasePrice) || 0;
+    if (sellingPrice !== undefined) product.sellingPrice = parseFloat(sellingPrice) || 0;
+    if (stockQuantity !== undefined) product.stockQuantity = Math.max(0, parseInt(stockQuantity, 10) || 0);
+    if (description !== undefined) product.description = description;
 
     await product.save();
 
-    const prodJson = product.toJSON();
-
     res.status(200).json({
       success: true,
-      message: 'Product updated successfully',
+      message: `Product "${product.name}" updated successfully`,
       data: {
-        ...prodJson,
-        _id: prodJson.id
+        ...product.toJSON(),
+        _id: product.id
       }
     });
   } catch (error) {
@@ -282,9 +195,44 @@ exports.updateProduct = async (req, res, next) => {
   }
 };
 
-// @desc    Delete a product
+// @desc    Add stock / restock pieces of an existing item
+// @route   POST /api/products/:id/stock
+// @access  Private (Admin, Stock, Staff)
+exports.addStock = async (req, res, next) => {
+  try {
+    const { quantity = 1 } = req.body;
+    const qty = parseInt(quantity, 10);
+    if (isNaN(qty) || qty < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid quantity to add (at least 1)'
+      });
+    }
+
+    const product = await Product.findByPk(req.params.id);
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    product.stockQuantity = (product.stockQuantity || 0) + qty;
+    await product.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Added ${qty} piece(s) to "${product.name}". Total in stock: ${product.stockQuantity} Pcs`,
+      data: {
+        ...product.toJSON(),
+        _id: product.id
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Delete product
 // @route   DELETE /api/products/:id
-// @access  Private/Admin
+// @access  Private (Admin only)
 exports.deleteProduct = async (req, res, next) => {
   try {
     const product = await Product.findByPk(req.params.id);
@@ -296,28 +244,11 @@ exports.deleteProduct = async (req, res, next) => {
       });
     }
 
-    // Check if there are active serials on credit or sold
-    const activeSerials = await SerialNumber.count({
-      where: {
-        productId: product.id,
-        status: { [Op.in]: ['On Credit', 'Sold'] }
-      }
-    });
-
-    if (activeSerials > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot delete product. There are ${activeSerials} serial numbers linked to active sales or credit.`
-      });
-    }
-
-    // Clean up available or damaged serials
-    await SerialNumber.destroy({ where: { productId: product.id } });
     await product.destroy();
 
     res.status(200).json({
       success: true,
-      message: 'Product and associated inventory deleted successfully'
+      message: `Product "${product.name}" removed successfully`
     });
   } catch (error) {
     next(error);

@@ -4,26 +4,38 @@ const Product = require('./Product');
 const Customer = require('./Customer');
 const SerialNumber = require('./SerialNumber');
 const Payment = require('./Payment');
+const Sale = require('./Sale');
 
-// Product <-> SerialNumber
-Product.hasMany(SerialNumber, { foreignKey: 'productId', as: 'serials', onDelete: 'CASCADE' });
-SerialNumber.belongsTo(Product, { foreignKey: 'productId', as: 'product' });
+// Product <-> Sale
+Product.hasMany(Sale, { foreignKey: 'productId', as: 'sales', onDelete: 'CASCADE' });
+Sale.belongsTo(Product, { foreignKey: 'productId', as: 'product' });
 
-// Customer <-> SerialNumber
-Customer.hasMany(SerialNumber, { foreignKey: 'customerId', as: 'serialNumbers' });
-SerialNumber.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
+// Customer <-> Sale
+Customer.hasMany(Sale, { foreignKey: 'customerId', as: 'sales' });
+Sale.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
 
-// SerialNumber <-> Payment
-SerialNumber.hasMany(Payment, { foreignKey: 'serialNumberId', as: 'payments', onDelete: 'CASCADE' });
-Payment.belongsTo(SerialNumber, { foreignKey: 'serialNumberId', as: 'serialNumber' });
+// Sale <-> Payment
+Sale.hasMany(Payment, { foreignKey: 'saleId', as: 'payments', onDelete: 'CASCADE' });
+Payment.belongsTo(Sale, { foreignKey: 'saleId', as: 'sale' });
 
 // Customer <-> Payment
 Customer.hasMany(Payment, { foreignKey: 'customerId', as: 'payments' });
 Payment.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
 
+// Product <-> SerialNumber (preserved for backwards-compatibility)
+Product.hasMany(SerialNumber, { foreignKey: 'productId', as: 'serials', onDelete: 'CASCADE' });
+SerialNumber.belongsTo(Product, { foreignKey: 'productId', as: 'product' });
+Customer.hasMany(SerialNumber, { foreignKey: 'customerId', as: 'serialNumbers' });
+SerialNumber.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
+SerialNumber.hasMany(Payment, { foreignKey: 'serialNumberId', as: 'payments', onDelete: 'CASCADE' });
+Payment.belongsTo(SerialNumber, { foreignKey: 'serialNumberId', as: 'serialNumber' });
+
 // User associations (Audit / CreatedBy)
 User.hasMany(Product, { foreignKey: 'createdById' });
 Product.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+
+User.hasMany(Sale, { foreignKey: 'soldById' });
+Sale.belongsTo(User, { foreignKey: 'soldById', as: 'soldBy' });
 
 User.hasMany(SerialNumber, { foreignKey: 'createdById' });
 SerialNumber.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
@@ -40,6 +52,7 @@ module.exports = {
   Product,
   Customer,
   SerialNumber,
-  Payment
+  Payment,
+  Sale
 };
 

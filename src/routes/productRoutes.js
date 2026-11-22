@@ -5,6 +5,7 @@ const {
   getProductById,
   createProduct,
   updateProduct,
+  addStock,
   deleteProduct
 } = require('../controllers/productController');
 const { protect, authorize } = require('../middleware/auth');
@@ -20,5 +21,7 @@ router
   .put(protect, authorize('admin', 'stock', 'staff'), updateProduct)
   .delete(protect, authorize('admin'), deleteProduct);
 
-module.exports = router;
+// Restock / Add pieces to stock
+router.post('/:id/stock', protect, authorize('admin', 'stock', 'staff'), addStock);
 
+module.exports = router;

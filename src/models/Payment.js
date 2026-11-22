@@ -28,6 +28,10 @@ const Payment = sequelize.define(
       type: DataTypes.TEXT,
       defaultValue: ''
     },
+    saleId: {
+      type: DataTypes.UUID,
+      allowNull: true
+    },
     paymentDate: {
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW
