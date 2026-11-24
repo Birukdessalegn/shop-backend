@@ -107,10 +107,9 @@ exports.createProduct = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Item name is required' });
     }
 
-    const cost = parseFloat(purchasePrice);
-    if (isNaN(cost) || cost < 0) {
-      return res.status(400).json({ success: false, message: 'Valid cost price is required' });
-    }
+    const cost = purchasePrice !== undefined && purchasePrice !== '' && !isNaN(parseFloat(purchasePrice))
+      ? Math.max(0, parseFloat(purchasePrice))
+      : 0;
 
     const sell = parseFloat(sellingPrice);
     if (isNaN(sell) || sell < 0) {

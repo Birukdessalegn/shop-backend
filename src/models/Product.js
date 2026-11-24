@@ -30,7 +30,8 @@ const Product = sequelize.define(
     },
     purchasePrice: {
       type: DataTypes.DECIMAL(10, 2),
-      allowNull: false,
+      allowNull: true,
+      defaultValue: 0.00,
       validate: {
         min: { args: [0], msg: 'Purchase price cannot be negative' }
       },
